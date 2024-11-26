@@ -1,23 +1,38 @@
-FROM gradle:8.7.0-jdk21 AS builder
-COPY --chown=gradle:gradle . /home/gradle/src
-WORKDIR /home/gradle/src
-RUN gradle bootJar --no-daemon
+FROM debian:9.2
 
+LABEL maintainer "opsxcq@strm.sh"
 
-FROM amazoncorretto:21-alpine-jdk
-LABEL org.opencontainers.image.source="https://github.com/DataDog/vulnerable-java-application/"
-EXPOSE 8080
-RUN mkdir /app
-WORKDIR /app
-COPY --from=builder /home/gradle/src/build/libs/*.jar /app/spring-boot-application.jar
+RUN apt-get update && \
+  apt-get upgrade -y && \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  debconf-utils && \
+  echo mariadb-server mysql-server/root_password password vulnerables | debconf-set-selections && \
+  echo mariadb-server mysql-server/root_password_again password vulnerables | debconf-set-selections && \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  apache2 \
+  mariadb-server \
+  php \
+  php-mysql \
+  php-pgsql \
+  php-pear \
+  php-gd \
+  && \
+  apt-get clean && \
+  rm -rf /var/lib/apt/lists/*
 
-# Install Datadog agent
-RUN wget -O dd-java-agent.jar https://github.com/DataDog/dd-trace-java/releases/download/v1.35.0/dd-java-agent.jar && \
-  echo "14f6c325679c7f11db6bc3dc7baba98abd005c1865bd9c61a2a8d560f1a65b26  dd-java-agent.jar" > SHA256SUMS && \
-  sha256sum -c SHA256SUMS
+COPY php.ini /etc/php5/apache2/php.ini
+COPY dvwa /var/www/html
 
-# Utility
-RUN apk add curl wget
-RUN mkdir -p /tmp/files && echo "hello" > /tmp/files/hello.txt && echo "world" > /tmp/files/foo.txt
+COPY config.inc.php /var/www/html/config/
 
-CMD ["java", "-javaagent:/app/dd-java-agent.jar", "-jar", "/app/spring-boot-application.jar"]
+RUN chown www-data:www-data -R /var/www/html && \
+  rm /var/www/html/index.html
+
+RUN service mysql start && \
+  sleep 3 && \
+  mysql -uroot -pvulnerables -e "CREATE USER app@localhost IDENTIFIED BY 'vulnerables';CREATE DATABASE dvwa;GRANT ALL privileges ON dvwa.* TO 'app'@localhost;"
+
+EXPOSE 80
+
+COPY main.sh /
+ENTRYPOINT ["/main.sh"]
